@@ -423,11 +423,11 @@ class AdvancedTrafficAIGUI:
                                        command=self.toggle_overload, style='Modern.TButton')
         self.overload_btn.pack(side=tk.LEFT, padx=5)
 
-        # Advanced status indicators
+        # Advanced status indicators with radio buttons
         self.setup_advanced_status_display(control_frame)
 
     def setup_advanced_status_display(self, parent):
-        """Setup advanced status display with gauges"""
+        """Setup advanced status display with gauges and mode indicators"""
         status_frame = ttk.Frame(parent)
         status_frame.pack(fill=tk.X, pady=10)
 
@@ -437,10 +437,9 @@ class AdvancedTrafficAIGUI:
 
         self.status_vars = {}
         status_grid = [
-            [("🖥️ System Status", "Stopped"), ("🚦 Traffic Mode", "Normal"), ("🚨 Emergency", "No")],
-            [("⚠️ Overload", "No"), ("🚪 Gate Status", "Closed"), ("🌫️ Pollution", "Low")],
-            [("📈 Efficiency", "0%"), ("🚗 Total Cars", "0"), ("⏱️ Avg Time", "0s")],
-            [("🚗 Subroad 1", "0"), ("🚗 Subroad 2", "0"), ("🔢 Total Limit", "7")]
+            [("🖥️ System Status", "Stopped"), ("🚦 Traffic Mode", "Normal"), ("🚗 Total Cars", "0")],
+            [("🚗 Subroad 1", "0"), ("🚗 Subroad 2", "0"), ("🚪 Gate Status", "CLOSED")],  # Added Gate Status here
+            [("📈 Efficiency", "0%"), ("⏱️ Avg Time", "0s"), ("🌫️ Pollution", "Low")]
         ]
 
         for row_idx, row in enumerate(status_grid):
@@ -461,6 +460,47 @@ class AdvancedTrafficAIGUI:
                 else:
                     self.status_labels = {label: status_label}
 
+        # Add mode indicators for overload and emergency status
+        mode_frame = ttk.Frame(sys_status_frame)
+        mode_frame.pack(fill=tk.X, pady=10)
+
+        # Overload Indicator
+        overload_frame = ttk.Frame(mode_frame)
+        overload_frame.pack(side=tk.LEFT, padx=20)
+
+        ttk.Label(overload_frame, text="🚨 OVERLOAD MODE:",
+                  font=('Arial', 10, 'bold')).pack(side=tk.LEFT)
+
+        self.overload_indicator = tk.Label(
+            overload_frame,
+            text="INACTIVE",
+            font=('Arial', 10, 'bold'),
+            bg='red',  # Red when inactive
+            fg='white',
+            relief='raised',
+            padx=10,
+            pady=2
+        )
+        self.overload_indicator.pack(side=tk.LEFT, padx=5)
+
+        # Emergency Indicator
+        emergency_frame = ttk.Frame(mode_frame)
+        emergency_frame.pack(side=tk.LEFT, padx=20)
+
+        ttk.Label(emergency_frame, text="🚑 EMERGENCY MODE:",
+                  font=('Arial', 10, 'bold')).pack(side=tk.LEFT)
+
+        self.emergency_indicator = tk.Label(
+            emergency_frame,
+            text="INACTIVE",
+            font=('Arial', 10, 'bold'),
+            bg='red',  # Red when inactive
+            fg='white',
+            relief='raised',
+            padx=10,
+            pady=2
+        )
+        self.emergency_indicator.pack(side=tk.LEFT, padx=5)
     def setup_advanced_realtime_display(self, parent):
         """Setup advanced real-time data display"""
         data_frame = ttk.LabelFrame(parent, text="📡 REAL-TIME SENSOR DATA", padding=10)
@@ -841,32 +881,66 @@ System Status: {'🟢 NORMAL' if total_cars <= 7 else '🟡 MODERATE' if total_c
         self.stats_text.insert(1.0, stats_text)
 
     def update_advanced_status_display(self, data_point, metrics):
-        """Update advanced status display with colors"""
+        """Update advanced status display with colors and mode indicators"""
         total_cars = data_point['car_count_sub1'] + data_point['car_count_sub2']
 
         self.status_vars["🚦 Traffic Mode"].set(data_point['traffic_status'])
-        self.status_vars["🚨 Emergency"].set("Yes" if self.ai_system.emergency_mode else "No")
-        self.status_vars["⚠️ Overload"].set("Yes" if self.ai_system.overload_mode else "No")
-        self.status_vars["🚪 Gate Status"].set("Open" if data_point['gate_state'] else "Closed")
-        self.status_vars["🌫️ Pollution"].set(self.get_pollution_alert(data_point['mq135_pollution']))
-        self.status_vars["📈 Efficiency"].set(f"{metrics['system_efficiency']:.1%}")
         self.status_vars["🚗 Total Cars"].set(f"{total_cars}")
         self.status_vars["⏱️ Avg Time"].set(f"{metrics['avg_time_in_system']:.1f}s")
         self.status_vars["🚗 Subroad 1"].set(f"{data_point['car_count_sub1']}")
         self.status_vars["🚗 Subroad 2"].set(f"{data_point['car_count_sub2']}")
+        self.status_vars["📈 Efficiency"].set(f"{metrics['system_efficiency']:.1%}")
+        self.status_vars["🌫️ Pollution"].set(self.get_pollution_alert(data_point['mq135_pollution']))
+
+        # Update gate status - OPEN during overload (cars > 5) or emergency
+        if self.ai_system.overload_mode or self.ai_system.emergency_mode or total_cars > 5:
+            self.status_vars["🚪 Gate Status"].set("OPEN")
+            # Make gate status green when open
+            if "🚪 Gate Status" in self.status_labels:
+                self.status_labels["🚪 Gate Status"].config(foreground='green')
+        else:
+            self.status_vars["🚪 Gate Status"].set("CLOSED")
+            # Make gate status red when closed
+            if "🚪 Gate Status" in self.status_labels:
+                self.status_labels["🚪 Gate Status"].config(foreground='red')
+
+        # Update mode indicators based on system state
+        if self.ai_system.overload_mode:
+            self.overload_indicator.config(
+                text="ACTIVE",
+                bg='green',  # Green when active
+                fg='white'
+            )
+        else:
+            self.overload_indicator.config(
+                text="INACTIVE",
+                bg='red',  # Red when inactive
+                fg='white'
+            )
+
+        if self.ai_system.emergency_mode:
+            self.emergency_indicator.config(
+                text="ACTIVE",
+                bg='red',  # Red when active
+                fg='white'
+            )
+        else:
+            self.emergency_indicator.config(
+                text="INACTIVE",
+                bg='red',  # Red when inactive
+                fg='white'
+            )
 
         # Update colors based on status
         status_colors = {
             "🚦 Traffic Mode": {
                 "✅ NORMAL": "green", "⚠️  MODERATE": "orange", "🚨 OVERLOAD": "red", "🚑 EMERGENCY": "purple"
             },
-            "🚨 Emergency": {"Yes": "red", "No": "green"},
-            "⚠️ Overload": {"Yes": "red", "No": "green"},
-            "🌫️ Pollution": {"LOW": "green", "MODERATE": "orange", "HIGH": "red", "CRITICAL": "purple"},
             "🚗 Total Cars": {
                 "0": "green", "1": "green", "2": "green", "3": "green",
                 "4": "green", "5": "orange", "6": "orange", "7": "red"
-            }
+            },
+            "🌫️ Pollution": {"LOW": "green", "MODERATE": "orange", "HIGH": "red", "CRITICAL": "purple"}
         }
 
         for label, var in self.status_vars.items():
@@ -877,7 +951,6 @@ System Status: {'🟢 NORMAL' if total_cars <= 7 else '🟡 MODERATE' if total_c
                     if key in value:
                         self.status_labels[label].config(foreground=color)
                         break
-
     def update_advanced_analytics(self):
         """Update advanced analytics plots"""
         if len(self.ai_system.real_time_buffer) < 3:
