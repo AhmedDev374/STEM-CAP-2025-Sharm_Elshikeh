@@ -267,15 +267,29 @@ class AdvancedTrafficAISystem:
         return data_point
 
     def toggle_overload(self):
-        """Toggle overload mode with proper car distribution"""
+        """Toggle overload mode immediately - no waiting for natural car distribution"""
         if not self.overload_mode:
-            # Activate overload mode - allow cars to go to subroad 2
+            # Activate overload mode immediately
             self.overload_mode = True
+            print("🚨 OVERLOAD MODE ACTIVATED - Subroad 2 now available")
         else:
-            # Deactivate overload mode
+            # Deactivate overload mode immediately
             self.overload_mode = False
-            # When deactivating, we'll let the natural logic in generate_sensor_data
-            # handle moving cars back from subroad 2 to subroad 1
+            print("✅ OVERLOAD MODE DEACTIVATED - Returning to normal flow")
+
+            # When deactivating, immediately move cars from subroad 2 back to subroad 1 if possible
+            if self.current_car_count_sub2 > 0:
+                # Move cars from subroad 2 back to subroad 1 if subroad 1 has space
+                while self.current_car_count_sub2 > 0 and self.current_car_count_sub1 < 5:
+                    if self.car_tracking['sub2_enter_times']:
+                        car_id = random.choice(list(self.car_tracking['sub2_enter_times'].keys()))
+                        enter_time = self.car_tracking['sub2_enter_times'].pop(car_id)
+                        # Move to subroad 1
+                        self.car_tracking['sub1_enter_times'][car_id] = enter_time
+                    self.current_car_count_sub2 -= 1
+                    self.current_car_count_sub1 += 1
+                print(f"🔄 Moved {self.current_car_count_sub1} cars from subroad 2 to subroad 1")
+
     def clear_emergency(self):
         """Clear emergency mode after 15 seconds"""
         self.emergency_mode = False
@@ -763,13 +777,26 @@ class AdvancedTrafficAIGUI:
             self.emergency_btn.config(text="🚑 TOGGLE EMERGENCY")
 
     def toggle_overload(self):
-        """Toggle overload mode"""
+        """Toggle overload mode with immediate visual feedback"""
         self.ai_system.toggle_overload()
         if self.ai_system.overload_mode:
-            self.overload_btn.config(text="🚗 OVERLOAD ACTIVE")
+            self.overload_btn.config(text="🚗 OVERLOAD ACTIVE", background='#ff4444')
+            # Update status immediately
+            self.status_vars["🚦 Traffic Mode"].set("🚨 OVERLOAD")
+            if "🚦 Traffic Mode" in self.status_labels:
+                self.status_labels["🚦 Traffic Mode"].config(foreground='red')
         else:
-            self.overload_btn.config(text="🚗 TOGGLE OVERLOAD")
-
+            self.overload_btn.config(text="🚗 TOGGLE OVERLOAD", background='SystemButtonFace')
+            # Update status immediately
+            total_cars = self.ai_system.current_car_count_sub1 + self.ai_system.current_car_count_sub2
+            if total_cars >= 3:
+                self.status_vars["🚦 Traffic Mode"].set("⚠️  MODERATE")
+                if "🚦 Traffic Mode" in self.status_labels:
+                    self.status_labels["🚦 Traffic Mode"].config(foreground='orange')
+            else:
+                self.status_vars["🚦 Traffic Mode"].set("✅ NORMAL")
+                if "🚦 Traffic Mode" in self.status_labels:
+                    self.status_labels["🚦 Traffic Mode"].config(foreground='green')
     def run_advanced_simulation(self):
         """Advanced simulation loop"""
         while self.ai_system.simulation_running:
