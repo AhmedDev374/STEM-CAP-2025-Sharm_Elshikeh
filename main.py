@@ -1,7 +1,7 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
 import matplotlib.pyplot as plt
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 from matplotlib.figure import Figure
 import pandas as pd
 import numpy as np
@@ -81,6 +81,8 @@ class AdvancedTrafficAISystem:
         self.emergency_mode = False
         self.overload_mode = False
         self.next_car_id = 1
+        self.total_cars_limit = 7
+        self.subroad1_limit = 5
 
     def initialize_models(self):
         """Initialize advanced machine learning models"""
@@ -104,7 +106,6 @@ class AdvancedTrafficAISystem:
         timestamp = datetime.now()
 
         # Ultrasonic sensors as car counters (0 = car detected, >0 = no car)
-        # Simulate car entry/exit events
         us_sub1_start = 0 if random.random() > 0.8 else random.randint(100, 300)
         us_sub1_end = 0 if random.random() > 0.85 else random.randint(100, 300)
         us_sub2_start = 0 if random.random() > 0.8 else random.randint(100, 300)
@@ -125,18 +126,35 @@ class AdvancedTrafficAISystem:
         cars_entered_sub2 = 0
         cars_exited_sub2 = 0
 
-        # Subroad 1 entry
-        if us_sub1_start == 0:
-            car_id = self.generate_car_id()
-            self.car_tracking['sub1_enter_times'][car_id] = timestamp
-            self.car_tracking['car_ids'].add(car_id)
-            self.total_cars_entered_sub1 += 1
-            self.current_car_count_sub1 += 1
-            cars_entered_sub1 = 1
+        # Handle emergency mode first - clear subroad 2
+        if self.emergency_mode:
+            # Move all cars from subroad 2 to exited
+            cars_to_exit = self.current_car_count_sub2
+            for _ in range(cars_to_exit):
+                if self.car_tracking['sub2_enter_times']:
+                    car_id = random.choice(list(self.car_tracking['sub2_enter_times'].keys()))
+                    enter_time = self.car_tracking['sub2_enter_times'].pop(car_id)
+                    time_in_system = (timestamp - enter_time).total_seconds()
+                    self.performance_metrics['avg_time_in_system'].append(time_in_system)
+                self.total_cars_exited_sub2 += 1
+                cars_exited_sub2 = 1
+            self.current_car_count_sub2 = 0
+
+        # Subroad 1 entry - normal flow (up to 5 cars max)
+        if us_sub1_start == 0 and not self.emergency_mode:
+            total_cars = self.current_car_count_sub1 + self.current_car_count_sub2
+
+            # Allow entry to subroad1 only if it has less than 5 cars and total system is under limit
+            if self.current_car_count_sub1 < 5 and total_cars < self.total_cars_limit:
+                car_id = self.generate_car_id()
+                self.car_tracking['sub1_enter_times'][car_id] = timestamp
+                self.car_tracking['car_ids'].add(car_id)
+                self.total_cars_entered_sub1 += 1
+                self.current_car_count_sub1 += 1
+                cars_entered_sub1 = 1
 
         # Subroad 1 exit
-        if us_sub1_end == 0 and self.current_car_count_sub1 > 0:
-            # Find a car to exit (simplified)
+        if us_sub1_end == 0 and self.current_car_count_sub1 > 0 and not self.emergency_mode:
             if self.car_tracking['sub1_enter_times']:
                 car_id = random.choice(list(self.car_tracking['sub1_enter_times'].keys()))
                 enter_time = self.car_tracking['sub1_enter_times'].pop(car_id)
@@ -146,17 +164,22 @@ class AdvancedTrafficAISystem:
             self.current_car_count_sub1 = max(0, self.current_car_count_sub1 - 1)
             cars_exited_sub1 = 1
 
-        # Subroad 2 entry
-        if us_sub2_start == 0:
-            car_id = self.generate_car_id()
-            self.car_tracking['sub2_enter_times'][car_id] = timestamp
-            self.car_tracking['car_ids'].add(car_id)
-            self.total_cars_entered_sub2 += 1
-            self.current_car_count_sub2 += 1
-            cars_entered_sub2 = 1
+        # Subroad 2 entry - ONLY when subroad1 is full (5 cars) AND we have overload
+        if us_sub2_start == 0 and not self.emergency_mode:
+            total_cars = self.current_car_count_sub1 + self.current_car_count_sub2
 
-        # Subroad 2 exit
-        if us_sub2_end == 0 and self.current_car_count_sub2 > 0:
+            # During overload OR when we naturally reach 5+ cars, use subroad2 for extras
+            if (
+                    self.overload_mode or total_cars >= 5) and total_cars < self.total_cars_limit and self.current_car_count_sub1 >= 5:
+                car_id = self.generate_car_id()
+                self.car_tracking['sub2_enter_times'][car_id] = timestamp
+                self.car_tracking['car_ids'].add(car_id)
+                self.total_cars_entered_sub2 += 1
+                self.current_car_count_sub2 += 1
+                cars_entered_sub2 = 1
+
+        # Subroad 2 exit - only when not in emergency mode
+        if us_sub2_end == 0 and self.current_car_count_sub2 > 0 and not self.emergency_mode:
             if self.car_tracking['sub2_enter_times']:
                 car_id = random.choice(list(self.car_tracking['sub2_enter_times'].keys()))
                 enter_time = self.car_tracking['sub2_enter_times'].pop(car_id)
@@ -166,30 +189,48 @@ class AdvancedTrafficAISystem:
             self.current_car_count_sub2 = max(0, self.current_car_count_sub2 - 1)
             cars_exited_sub2 = 1
 
+        # Auto-detect overload condition based on total cars
+        total_cars = self.current_car_count_sub1 + self.current_car_count_sub2
+        if total_cars >= 6 and not self.emergency_mode:
+            self.overload_mode = True
+        elif total_cars <= 5 and not self.emergency_mode:
+            self.overload_mode = False
+
+        # When overload mode is deactivated AND we're not in emergency, move cars back from subroad2 to subroad1
+        if not self.overload_mode and self.current_car_count_sub2 > 0 and not self.emergency_mode:
+            # Move cars from subroad 2 back to subroad 1 if possible
+            while self.current_car_count_sub2 > 0 and self.current_car_count_sub1 < 5:
+                if self.car_tracking['sub2_enter_times']:
+                    car_id = random.choice(list(self.car_tracking['sub2_enter_times'].keys()))
+                    enter_time = self.car_tracking['sub2_enter_times'].pop(car_id)
+                    # Move to subroad 1
+                    self.car_tracking['sub1_enter_times'][car_id] = enter_time
+                self.current_car_count_sub2 -= 1
+                self.current_car_count_sub1 += 1
+
         # Determine traffic status with enhanced logic
+        total_cars = self.current_car_count_sub1 + self.current_car_count_sub2
+
         if self.emergency_mode:
             traffic_status = "🚑 EMERGENCY"
             led_red = 1
             led_green = 0
-            gate_state = 0  # Close gate during emergency
-        elif self.current_car_count_sub1 > 8 or pollution > 1800:
+            gate_state = 1  # Open gate during emergency
+        elif self.overload_mode:
             traffic_status = "🚨 OVERLOAD"
-            led_red = 1
-            led_green = 0
-            gate_state = 1  # Open gate for subroad 2
-            self.overload_mode = True
-        elif self.current_car_count_sub1 > 5:
+            led_red = 0
+            led_green = 1
+            gate_state = 1  # Open gate in overload
+        elif self.current_car_count_sub1 >= 3:
             traffic_status = "⚠️  MODERATE"
             led_red = 0
             led_green = 1
             gate_state = 0
-            self.overload_mode = False
         else:
             traffic_status = "✅ NORMAL"
             led_red = 0
             led_green = 1
             gate_state = 0
-            self.overload_mode = False
 
         # Ambulance detection logic
         ambulance_detected = 1 if ir_detection else 0
@@ -225,9 +266,37 @@ class AdvancedTrafficAISystem:
 
         return data_point
 
+    def toggle_overload(self):
+        """Toggle overload mode with proper car distribution"""
+        if not self.overload_mode:
+            # Activate overload mode - allow cars to go to subroad 2
+            self.overload_mode = True
+        else:
+            # Deactivate overload mode
+            self.overload_mode = False
+            # When deactivating, we'll let the natural logic in generate_sensor_data
+            # handle moving cars back from subroad 2 to subroad 1
     def clear_emergency(self):
         """Clear emergency mode after 15 seconds"""
         self.emergency_mode = False
+        # After emergency, ensure normal distribution (3-5 cars in subroad 1, 0 in subroad 2)
+        if self.current_car_count_sub2 > 0:
+            # Move cars from subroad 2 back to subroad 1 if possible
+            while self.current_car_count_sub2 > 0 and self.current_car_count_sub1 < 5:
+                if self.car_tracking['sub2_enter_times']:
+                    car_id = random.choice(list(self.car_tracking['sub2_enter_times'].keys()))
+                    enter_time = self.car_tracking['sub2_enter_times'].pop(car_id)
+                    # Move to subroad 1
+                    self.car_tracking['sub1_enter_times'][car_id] = enter_time
+                self.current_car_count_sub2 -= 1
+                self.current_car_count_sub1 += 1
+
+    def toggle_emergency(self):
+        """Toggle emergency mode"""
+        self.emergency_mode = not self.emergency_mode
+        if self.emergency_mode:
+            # Emergency mode lasts for 15 seconds
+            threading.Timer(15, self.clear_emergency).start()
 
     def calculate_advanced_metrics(self, data_point):
         """Calculate advanced performance metrics"""
@@ -284,6 +353,7 @@ class AdvancedTrafficAIGUI:
         self.root.configure(bg='#2c3e50')
 
         self.ai_system = AdvancedTrafficAISystem()
+        self.expanded_figures = {}  # Store expanded figures
         self.setup_styles()
         self.setup_gui()
         self.setup_advanced_plots()
@@ -345,12 +415,12 @@ class AdvancedTrafficAIGUI:
                                    command=self.stop_simulation, state=tk.DISABLED, style='Modern.TButton')
         self.stop_btn.pack(side=tk.LEFT, padx=5)
 
-        self.emergency_btn = ttk.Button(btn_frame, text="🚑 SIMULATE EMERGENCY",
-                                        command=self.simulate_emergency, style='Modern.TButton')
+        self.emergency_btn = ttk.Button(btn_frame, text="🚑 TOGGLE EMERGENCY",
+                                        command=self.toggle_emergency, style='Modern.TButton')
         self.emergency_btn.pack(side=tk.LEFT, padx=5)
 
-        self.overload_btn = ttk.Button(btn_frame, text="🚗 SIMULATE OVERLOAD",
-                                       command=self.simulate_overload, style='Modern.TButton')
+        self.overload_btn = ttk.Button(btn_frame, text="🚗 TOGGLE OVERLOAD",
+                                       command=self.toggle_overload, style='Modern.TButton')
         self.overload_btn.pack(side=tk.LEFT, padx=5)
 
         # Advanced status indicators
@@ -369,7 +439,8 @@ class AdvancedTrafficAIGUI:
         status_grid = [
             [("🖥️ System Status", "Stopped"), ("🚦 Traffic Mode", "Normal"), ("🚨 Emergency", "No")],
             [("⚠️ Overload", "No"), ("🚪 Gate Status", "Closed"), ("🌫️ Pollution", "Low")],
-            [("📈 Efficiency", "0%"), ("🚗 Total Cars", "0"), ("⏱️ Avg Time", "0s")]
+            [("📈 Efficiency", "0%"), ("🚗 Total Cars", "0"), ("⏱️ Avg Time", "0s")],
+            [("🚗 Subroad 1", "0"), ("🚗 Subroad 2", "0"), ("🔢 Total Limit", "7")]
         ]
 
         for row_idx, row in enumerate(status_grid):
@@ -434,13 +505,29 @@ class AdvancedTrafficAIGUI:
         analytics_frame = ttk.LabelFrame(parent, text="🤖 AI ANALYTICS & VISUALIZATIONS", padding=10)
         analytics_frame.pack(fill=tk.BOTH, expand=True, pady=5)
 
-        # Create matplotlib figures with advanced layout
+        # Create notebook for analytics
+        self.analytics_notebook = ttk.Notebook(analytics_frame)
+        self.analytics_notebook.pack(fill=tk.BOTH, expand=True)
+
+        # Main dashboard tab
+        dashboard_tab = ttk.Frame(self.analytics_notebook)
+        self.analytics_notebook.add(dashboard_tab, text="📊 DASHBOARD")
+
+        # Create main figure for dashboard
         self.fig = Figure(figsize=(12, 10), dpi=100, facecolor='#2c3e50')
         self.setup_advanced_plots_layout()
 
-        canvas = FigureCanvasTkAgg(self.fig, analytics_frame)
+        canvas = FigureCanvasTkAgg(self.fig, dashboard_tab)
         canvas.draw()
         canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+
+        # Add navigation toolbar
+        toolbar = NavigationToolbar2Tk(canvas, dashboard_tab)
+        toolbar.update()
+        canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+
+        # Individual graph tabs
+        self.create_individual_graph_tabs()
 
         # Control buttons for analytics
         control_frame = ttk.Frame(analytics_frame)
@@ -450,6 +537,135 @@ class AdvancedTrafficAIGUI:
                    command=self.update_advanced_analytics).pack(side=tk.LEFT, padx=5)
         ttk.Button(control_frame, text="💾 EXPORT DATA",
                    command=self.export_data).pack(side=tk.LEFT, padx=5)
+        ttk.Button(control_frame, text="📈 EXPAND ALL GRAPHS",
+                   command=self.expand_all_graphs).pack(side=tk.LEFT, padx=5)
+
+    def create_individual_graph_tabs(self):
+        """Create individual tabs for each graph"""
+        graph_tabs = [
+            ("🚗 Traffic Flow", self.create_traffic_flow_tab),
+            ("📈 Performance", self.create_performance_tab),
+            ("🌫️ Pollution", self.create_pollution_tab),
+            ("⚡ Efficiency", self.create_efficiency_tab),
+            ("🔥 Heatmap", self.create_heatmap_tab)
+        ]
+
+        for tab_name, tab_creator in graph_tabs:
+            tab = ttk.Frame(self.analytics_notebook)
+            self.analytics_notebook.add(tab, text=tab_name)
+            tab_creator(tab)
+
+    def create_traffic_flow_tab(self, parent):
+        """Create traffic flow analysis tab"""
+        fig = Figure(figsize=(10, 8), dpi=100, facecolor='#2c3e50')
+        ax1 = fig.add_subplot(211)
+        ax2 = fig.add_subplot(212)
+
+        ax1.set_facecolor('#34495e')
+        ax2.set_facecolor('#34495e')
+        for ax in [ax1, ax2]:
+            ax.tick_params(colors='white')
+            ax.xaxis.label.set_color('white')
+            ax.yaxis.label.set_color('white')
+            ax.title.set_color('white')
+
+        canvas = FigureCanvasTkAgg(fig, parent)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+
+        toolbar = NavigationToolbar2Tk(canvas, parent)
+        toolbar.update()
+
+        self.expanded_figures["traffic_flow"] = (fig, ax1, ax2, canvas)
+
+    def create_performance_tab(self, parent):
+        """Create performance metrics tab"""
+        fig = Figure(figsize=(10, 8), dpi=100, facecolor='#2c3e50')
+        ax1 = fig.add_subplot(211)
+        ax2 = fig.add_subplot(212)
+
+        ax1.set_facecolor('#34495e')
+        ax2.set_facecolor('#34495e')
+        for ax in [ax1, ax2]:
+            ax.tick_params(colors='white')
+            ax.xaxis.label.set_color('white')
+            ax.yaxis.label.set_color('white')
+            ax.title.set_color('white')
+
+        canvas = FigureCanvasTkAgg(fig, parent)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+
+        toolbar = NavigationToolbar2Tk(canvas, parent)
+        toolbar.update()
+
+        self.expanded_figures["performance"] = (fig, ax1, ax2, canvas)
+
+    def create_pollution_tab(self, parent):
+        """Create pollution analysis tab"""
+        fig = Figure(figsize=(10, 8), dpi=100, facecolor='#2c3e50')
+        ax1 = fig.add_subplot(211)
+        ax2 = fig.add_subplot(212)
+
+        ax1.set_facecolor('#34495e')
+        ax2.set_facecolor('#34495e')
+        for ax in [ax1, ax2]:
+            ax.tick_params(colors='white')
+            ax.xaxis.label.set_color('white')
+            ax.yaxis.label.set_color('white')
+            ax.title.set_color('white')
+
+        canvas = FigureCanvasTkAgg(fig, parent)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+
+        toolbar = NavigationToolbar2Tk(canvas, parent)
+        toolbar.update()
+
+        self.expanded_figures["pollution"] = (fig, ax1, ax2, canvas)
+
+    def create_efficiency_tab(self, parent):
+        """Create efficiency analysis tab"""
+        fig = Figure(figsize=(10, 8), dpi=100, facecolor='#2c3e50')
+        ax1 = fig.add_subplot(211)
+        ax2 = fig.add_subplot(212)
+
+        ax1.set_facecolor('#34495e')
+        ax2.set_facecolor('#34495e')
+        for ax in [ax1, ax2]:
+            ax.tick_params(colors='white')
+            ax.xaxis.label.set_color('white')
+            ax.yaxis.label.set_color('white')
+            ax.title.set_color('white')
+
+        canvas = FigureCanvasTkAgg(fig, parent)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+
+        toolbar = NavigationToolbar2Tk(canvas, parent)
+        toolbar.update()
+
+        self.expanded_figures["efficiency"] = (fig, ax1, ax2, canvas)
+
+    def create_heatmap_tab(self, parent):
+        """Create heatmap analysis tab"""
+        fig = Figure(figsize=(10, 8), dpi=100, facecolor='#2c3e50')
+        ax = fig.add_subplot(111)
+
+        ax.set_facecolor('#34495e')
+        ax.tick_params(colors='white')
+        ax.xaxis.label.set_color('white')
+        ax.yaxis.label.set_color('white')
+        ax.title.set_color('white')
+
+        canvas = FigureCanvasTkAgg(fig, parent)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+
+        toolbar = NavigationToolbar2Tk(canvas, parent)
+        toolbar.update()
+
+        self.expanded_figures["heatmap"] = (fig, ax, canvas)
 
     def setup_advanced_plots_layout(self):
         """Setup advanced layout for matplotlib plots"""
@@ -498,18 +714,21 @@ class AdvancedTrafficAIGUI:
         self.stop_btn.config(state=tk.DISABLED)
         self.status_vars["🖥️ System Status"].set("Stopped")
 
-    def simulate_emergency(self):
-        """Simulate an emergency ambulance detection"""
-        self.ai_system.emergency_mode = True
-        threading.Timer(15, self.clear_simulated_emergency).start()
+    def toggle_emergency(self):
+        """Toggle emergency mode"""
+        self.ai_system.toggle_emergency()
+        if self.ai_system.emergency_mode:
+            self.emergency_btn.config(text="🚑 EMERGENCY ACTIVE")
+        else:
+            self.emergency_btn.config(text="🚑 TOGGLE EMERGENCY")
 
-    def clear_simulated_emergency(self):
-        """Clear simulated emergency"""
-        self.ai_system.emergency_mode = False
-
-    def simulate_overload(self):
-        """Simulate traffic overload"""
-        self.ai_system.current_car_count_sub1 = 15
+    def toggle_overload(self):
+        """Toggle overload mode"""
+        self.ai_system.toggle_overload()
+        if self.ai_system.overload_mode:
+            self.overload_btn.config(text="🚗 OVERLOAD ACTIVE")
+        else:
+            self.overload_btn.config(text="🚗 TOGGLE OVERLOAD")
 
     def run_advanced_simulation(self):
         """Advanced simulation loop"""
@@ -528,6 +747,7 @@ class AdvancedTrafficAIGUI:
             # Update analytics periodically
             if len(self.ai_system.real_time_buffer) % 5 == 0:
                 self.update_advanced_analytics()
+                self.update_expanded_analytics()
 
             time.sleep(0.5)  # Faster updates for better real-time feel
 
@@ -580,6 +800,7 @@ Congestion Risk: {self.get_congestion_risk(metrics['congestion_level'])}
 """
 
         # Car statistics tab
+        total_cars = data_point['car_count_sub1'] + data_point['car_count_sub2']
         stats_text = f"""
 === 🚗 ADVANCED CAR STATISTICS ===
 Timestamp: {data_point['timestamp'].strftime('%H:%M:%S')}
@@ -592,11 +813,17 @@ Total System: {data_point['total_entered_sub1'] + data_point['total_entered_sub2
 --- 🔄 REAL-TIME EVENTS ---
 Current in Subroad 1: {data_point['car_count_sub1']} cars
 Current in Subroad 2: {data_point['car_count_sub2']} cars
-Active Cars: {data_point['car_count_sub1'] + data_point['car_count_sub2']}
+Active Cars: {total_cars} / {self.ai_system.total_cars_limit}
 
 --- 🎯 EVENT DETECTION ---
 Last Event Sub1: {'ENTER' if data_point['cars_entered_sub1'] else 'EXIT' if data_point['cars_exited_sub1'] else 'NONE'}
 Last Event Sub2: {'ENTER' if data_point['cars_entered_sub2'] else 'EXIT' if data_point['cars_exited_sub2'] else 'NONE'}
+
+--- 🔄 OVERFLOW LOGIC ---
+Total Cars Limit: {self.ai_system.total_cars_limit}
+Subroad 1 Limit: {self.ai_system.subroad1_limit}
+Overflow Cars: {max(0, data_point['car_count_sub1'] - self.ai_system.subroad1_limit)}
+System Status: {'🟢 NORMAL' if total_cars <= 7 else '🟡 MODERATE' if total_cars <= 10 else '🔴 OVERLOAD'}
 """
 
         # Update GUI in thread-safe manner
@@ -615,14 +842,18 @@ Last Event Sub2: {'ENTER' if data_point['cars_entered_sub2'] else 'EXIT' if data
 
     def update_advanced_status_display(self, data_point, metrics):
         """Update advanced status display with colors"""
+        total_cars = data_point['car_count_sub1'] + data_point['car_count_sub2']
+
         self.status_vars["🚦 Traffic Mode"].set(data_point['traffic_status'])
-        self.status_vars["🚨 Emergency"].set("Yes" if data_point['ambulance_detected'] else "No")
-        self.status_vars["⚠️ Overload"].set("Yes" if data_point['car_count_sub1'] > 8 else "No")
+        self.status_vars["🚨 Emergency"].set("Yes" if self.ai_system.emergency_mode else "No")
+        self.status_vars["⚠️ Overload"].set("Yes" if self.ai_system.overload_mode else "No")
         self.status_vars["🚪 Gate Status"].set("Open" if data_point['gate_state'] else "Closed")
         self.status_vars["🌫️ Pollution"].set(self.get_pollution_alert(data_point['mq135_pollution']))
         self.status_vars["📈 Efficiency"].set(f"{metrics['system_efficiency']:.1%}")
-        self.status_vars["🚗 Total Cars"].set(f"{data_point['car_count_sub1'] + data_point['car_count_sub2']}")
+        self.status_vars["🚗 Total Cars"].set(f"{total_cars}")
         self.status_vars["⏱️ Avg Time"].set(f"{metrics['avg_time_in_system']:.1f}s")
+        self.status_vars["🚗 Subroad 1"].set(f"{data_point['car_count_sub1']}")
+        self.status_vars["🚗 Subroad 2"].set(f"{data_point['car_count_sub2']}")
 
         # Update colors based on status
         status_colors = {
@@ -631,7 +862,11 @@ Last Event Sub2: {'ENTER' if data_point['cars_entered_sub2'] else 'EXIT' if data
             },
             "🚨 Emergency": {"Yes": "red", "No": "green"},
             "⚠️ Overload": {"Yes": "red", "No": "green"},
-            "🌫️ Pollution": {"LOW": "green", "MODERATE": "orange", "HIGH": "red", "CRITICAL": "purple"}
+            "🌫️ Pollution": {"LOW": "green", "MODERATE": "orange", "HIGH": "red", "CRITICAL": "purple"},
+            "🚗 Total Cars": {
+                "0": "green", "1": "green", "2": "green", "3": "green",
+                "4": "green", "5": "orange", "6": "orange", "7": "red"
+            }
         }
 
         for label, var in self.status_vars.items():
@@ -658,6 +893,7 @@ Last Event Sub2: {'ENTER' if data_point['cars_entered_sub2'] else 'EXIT' if data
         pollution_levels = [dp[0]['mq135_pollution'] for dp in buffer_list]
         throughput_rates = [dp[1]['throughput_rate'] for dp in buffer_list]
         congestion_levels = [dp[1]['congestion_level'] for dp in buffer_list]
+        total_cars = [c1 + c2 for c1, c2 in zip(car_counts_1, car_counts_2)]
 
         # Clear previous plots
         for ax in [self.ax1, self.ax2, self.ax3, self.ax4, self.ax5, self.ax6, self.ax7]:
@@ -666,8 +902,10 @@ Last Event Sub2: {'ENTER' if data_point['cars_entered_sub2'] else 'EXIT' if data
         # Plot 1: Advanced Traffic Flow
         self.ax1.plot(timestamps, car_counts_1, 'b-', label='Subroad 1', linewidth=2.5, alpha=0.8)
         self.ax1.plot(timestamps, car_counts_2, 'r-', label='Subroad 2', linewidth=2.5, alpha=0.8)
+        self.ax1.plot(timestamps, total_cars, 'g--', label='Total Cars', linewidth=2, alpha=0.6)
         self.ax1.fill_between(timestamps, car_counts_1, alpha=0.3, color='blue')
         self.ax1.fill_between(timestamps, car_counts_2, alpha=0.3, color='red')
+        self.ax1.axhline(y=7, color='red', linestyle=':', alpha=0.7, label='Max Limit (7)')
         self.ax1.set_title('🚗 Real-time Traffic Flow Analysis', fontweight='bold', fontsize=10)
         self.ax1.set_ylabel('Number of Cars')
         self.ax1.legend()
@@ -728,19 +966,113 @@ Last Event Sub2: {'ENTER' if data_point['cars_entered_sub2'] else 'EXIT' if data
         self.fig.tight_layout()
         self.fig.canvas.draw()
 
+    def update_expanded_analytics(self):
+        """Update expanded individual graphs"""
+        if len(self.ai_system.real_time_buffer) < 3:
+            return
+
+        buffer_list = list(self.ai_system.real_time_buffer)
+        timestamps = [dp[0]['timestamp'] for dp in buffer_list]
+        car_counts_1 = [dp[0]['car_count_sub1'] for dp in buffer_list]
+        car_counts_2 = [dp[0]['car_count_sub2'] for dp in buffer_list]
+        response_times = [dp[1]['response_time'] for dp in buffer_list]
+        efficiencies = [dp[1]['system_efficiency'] for dp in buffer_list]
+        pollution_levels = [dp[0]['mq135_pollution'] for dp in buffer_list]
+        throughput_rates = [dp[1]['throughput_rate'] for dp in buffer_list]
+        congestion_levels = [dp[1]['congestion_level'] for dp in buffer_list]
+        total_cars = [c1 + c2 for c1, c2 in zip(car_counts_1, car_counts_2)]
+
+        # Update traffic flow tab
+        if "traffic_flow" in self.expanded_figures:
+            fig, ax1, ax2, canvas = self.expanded_figures["traffic_flow"]
+            ax1.clear()
+            ax2.clear()
+
+            # Top: Traffic distribution
+            ax1.plot(timestamps, car_counts_1, 'b-', label='Subroad 1', linewidth=3)
+            ax1.plot(timestamps, car_counts_2, 'r-', label='Subroad 2', linewidth=3)
+            ax1.plot(timestamps, total_cars, 'g--', label='Total Cars', linewidth=2)
+            ax1.axhline(y=7, color='red', linestyle=':', label='Max Limit')
+            ax1.set_title('🚗 Detailed Traffic Flow Analysis', fontweight='bold', fontsize=12)
+            ax1.set_ylabel('Number of Cars')
+            ax1.legend()
+            ax1.grid(True, alpha=0.3)
+
+            # Bottom: Traffic patterns
+            ax2.plot(timestamps, throughput_rates, 'orange', linewidth=3)
+            ax2.set_title('📈 Traffic Throughput Over Time', fontweight='bold', fontsize=12)
+            ax2.set_ylabel('Cars per Minute')
+            ax2.set_xlabel('Time')
+            ax2.grid(True, alpha=0.3)
+
+            fig.tight_layout()
+            canvas.draw()
+
+        # Update performance tab
+        if "performance" in self.expanded_figures:
+            fig, ax1, ax2, canvas = self.expanded_figures["performance"]
+            ax1.clear()
+            ax2.clear()
+
+            ax1.plot(timestamps, response_times, 'red', linewidth=3)
+            ax1.axhline(y=1.0, color='orange', linestyle='--', label='Target (1s)')
+            ax1.set_title('⏱️ System Response Times', fontweight='bold', fontsize=12)
+            ax1.set_ylabel('Response Time (seconds)')
+            ax1.legend()
+            ax1.grid(True, alpha=0.3)
+
+            accuracy_values = [dp[1]['car_count_accuracy'] for dp in buffer_list]
+            ax2.plot(timestamps, accuracy_values, 'green', linewidth=3)
+            ax2.axhline(y=0.95, color='red', linestyle='--', label='Target (95%)')
+            ax2.set_title('🎯 Car Counting Accuracy', fontweight='bold', fontsize=12)
+            ax2.set_ylabel('Accuracy Rate')
+            ax2.legend()
+            ax2.grid(True, alpha=0.3)
+
+            fig.tight_layout()
+            canvas.draw()
+
+    def expand_all_graphs(self):
+        """Expand all graphs to individual windows"""
+        for graph_name in self.expanded_figures:
+            self.create_expanded_window(graph_name)
+
+    def create_expanded_window(self, graph_name):
+        """Create expanded window for individual graph"""
+        window = tk.Toplevel(self.root)
+        window.title(f"Expanded {graph_name.replace('_', ' ').title()}")
+        window.geometry("1000x800")
+
+        fig, *_ = self.expanded_figures[graph_name]
+        new_fig = Figure(figsize=(12, 8), dpi=100)
+
+        # Copy the plot to new figure
+        for i, ax in enumerate(fig.axes):
+            new_ax = new_fig.add_subplot(len(fig.axes), 1, i + 1)
+            # Copy plot data (simplified - in real implementation, you'd copy the actual data)
+            new_ax.set_title(ax.get_title())
+            new_ax.set_xlabel(ax.get_xlabel())
+            new_ax.set_ylabel(ax.get_ylabel())
+
+        canvas = FigureCanvasTkAgg(new_fig, window)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+
+        toolbar = NavigationToolbar2Tk(canvas, window)
+        toolbar.update()
+
     def predict_traffic_flow(self, data_point):
         """Predict traffic flow using advanced ML model"""
-        flow_levels = ["🚗 Very Low", "🚙 Low", "🚐 Medium", "🚛 High", "🚨 Very High"]
-        # Simulate intelligent prediction based on current conditions
-        base_prediction = random.choice(flow_levels)
+        total_cars = data_point['car_count_sub1'] + data_point['car_count_sub2']
 
-        # Add some intelligence based on actual data
-        if data_point['car_count_sub1'] > 10:
-            base_prediction = "🚨 Very High"
-        elif data_point['car_count_sub1'] > 6:
-            base_prediction = "🚛 High"
-
-        return f"{base_prediction} (AI Enhanced)"
+        if total_cars >= 7:
+            return "🚨 CRITICAL (Max Capacity)"
+        elif total_cars >= 5:
+            return "🚛 HIGH (Approaching Limit)"
+        elif total_cars >= 3:
+            return "🚐 MODERATE (Normal)"
+        else:
+            return "🚗 LOW (Light Traffic)"
 
     def get_pollution_alert(self, pollution_level):
         """Get pollution alert level with emojis"""
